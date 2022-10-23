@@ -1,0 +1,3 @@
+0000000 Capture0/ROM01_No_Interaction_2_Hand/cam400262/image20625.jpg 61458
+0000300 Capture0/ROM01_No_Interaction_2_Hand/cam400287/image20637.jpg 61760
+0000600 Capture0/ROM01_No_Interaction_2_Hand/cam400322/image20649.jpg 62063

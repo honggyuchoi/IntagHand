@@ -34,6 +34,8 @@ from pytorch3d.renderer import (
     AmbientLights,
     SoftSilhouetteShader
 )
+import open3d as o3d
+import pdb
 
 
 class Renderer():
@@ -146,6 +148,112 @@ class mano_renderer(Renderer):
                            self.build_texture(v_color=self.dense_coor.expand(bs, vNum, 3).to(v3d)),
                            True)
 
+class ours_two_hand_renderer(Renderer):
+    def __init__(self, mano_path=None, dense_path=None, img_size=224, device='cpu'):
+        super(ours_two_hand_renderer, self).__init__(img_size, device)
+        if mano_path is None:
+            mano_path = get_mano_path()
+        if dense_path is None:
+            dense_path = get_dense_color_path()
+
+        self.mano = {'right': ManoLayer(mano_path['right'], center_idx=None),
+                     'left': ManoLayer(mano_path['left'], center_idx=None)}
+        self.mano['left'].to(self.device)
+        self.mano['right'].to(self.device)
+
+        left_faces = torch.from_numpy(self.mano['left'].get_faces().astype(np.int64)).to(self.device).unsqueeze(0)
+        right_faces = torch.from_numpy(self.mano['right'].get_faces().astype(np.int64)).to(self.device).unsqueeze(0)
+        left_faces = right_faces[..., [1, 0, 2]]
+
+        with open(dense_path, 'rb') as file:
+            dense_coor = pickle.load(file)
+        self.dense_coor = torch.from_numpy(dense_coor) * 255
+    
+    def render(self, img, obj_paths, cam_param, v_color=None):
+        left_mesh = o3d.io.read_triangle_mesh(obj_paths['left'])
+        left_verts = torch.Tensor(np.asarray(left_mesh.vertices)).cuda().unsqueeze(0)
+        left_faces = torch.Tensor(np.asarray(left_mesh.triangles)).cuda().unsqueeze(0)
+
+        right_mesh = o3d.io.read_triangle_mesh(obj_paths['right'])
+        right_verts = torch.Tensor(np.asarray(right_mesh.vertices)).cuda().unsqueeze(0)
+        right_faces = torch.Tensor(np.asarray(right_mesh.triangles)).cuda().unsqueeze(0)
+        
+        bs = left_verts.shape[0]
+        left_vNum = left_verts.shape[1]
+        right_vNum = right_verts.shape[1]
+        if v_color is None:
+            v_color = torch.zeros((left_vNum+right_vNum, 3))
+            v_color[:left_vNum, 0] = 204
+            v_color[:left_vNum, 1] = 153
+            v_color[:left_vNum, 2] = 0
+            v_color[left_vNum:, 0] = 102
+            v_color[left_vNum:, 1] = 102
+            v_color[left_vNum:, 2] = 255
+
+        if not isinstance(v_color, torch.Tensor):
+            v_color = torch.tensor(v_color)
+        v_color = v_color.expand(bs, left_vNum+right_vNum, 3).float().to(self.device)
+
+        v3d = torch.cat((left_verts, right_verts), dim=1)
+
+        faces = torch.cat((left_faces, right_faces + left_vNum), dim=1)
+
+        R = cam_param['R']
+        T = cam_param['t']
+        cameras = torch.Tensor(cam_param['camera']).unsqueeze(0)
+
+        # fs = -torch.tensor(cam_param['focal']).unsqueeze(0) * 2 / self.img_size
+        # pps = -torch.tensor(cam_param['princpt']).unsqueeze(0) * 2 / self.img_size + 1
+
+
+        fs = -torch.stack((cameras[:, 0, 0], cameras[:, 1, 1]), dim=-1) * 2 / self.img_size
+        pps = -cameras[:, :2, -1] * 2 / self.img_size + 1
+        cameras = PerspectiveCameras(focal_length=fs.to(self.device),
+                                    principal_point=pps.to(self.device),
+                                    in_ndc=True,
+                                    device=self.device
+                                    )
+
+        # cameras = PerspectiveCameras(focal_length=fs.to(self.device),
+        #                               principal_point=pps.to(self.device),
+        #                               in_ndc=True,
+        #                               device=self.device
+        #                               )
+        #import pdb; pdb.set_trace()
+    
+
+        # cameras = PerspectiveCameras(focal_length=torch.tensor(cam_param['focal']).unsqueeze(0).to(self.device),
+        #                              principal_point=torch.tensor(cam_param['princpt']).unsqueeze(0).to(self.device),
+        #                              in_ndc=True,
+        #                              device=self.device
+        #                             )
+
+        # R = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]]).repeat(bs, 1, 1)
+        # T = torch.tensor([0, 0, 10]).repeat(bs, 1)
+
+        # cameras = OrthographicCameras(focal_length=fs.to(self.device),
+        #                                principal_point=pps.to(self.device),
+        #                                R=R.to(self.device),
+        #                                T=T.to(self.device),
+        #                                in_ndc=True,
+        #                                device=self.device)
+       
+        lights = self.point_lights
+        textures= self.build_texture(None, None, None, v_color)
+        
+        mesh = Meshes(verts=v3d.to(self.device), faces=faces.to(self.device), textures=textures)
+        output = self.renderer_rgb(mesh, cameras=cameras, lights=lights)
+        alpha = output[..., 3]
+        img = output[..., :3] / 255
+
+        return img, alpha
+
+        # return self.render(v3d,
+        #                    self.faces.repeat(bs, 1, 1),
+        #                    self.build_camera(cameras, scale, trans2d),
+        #                    self.build_texture(uv_verts, uv_faces, texture, v_color),
+        #                    amblights,
+        #                    lights)
 
 class mano_two_hands_renderer(Renderer):
     def __init__(self, mano_path=None, dense_path=None, img_size=224, device='cpu'):
