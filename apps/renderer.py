@@ -37,70 +37,24 @@ def cut_img(img, bbox):
     return cut
 
 # TODO: Need to implement
-def ours_renderer(opt, img_path, output_path, test=True):
+def ours_renderer(opt, img_path, output_path, test=False):
 
-    if test:
-        img_path_list = glob.glob(os.path.join(img_path, '*.jpg')) + glob.glob(os.path.join(img_path, '*.png'))
-        
-        # with open(f'./test_data/InterHand2.6M_test_camera.json') as f:
-        #     camera_info = json.load(f)
-        # with open(f'./test_data/InterHand2.6M_test_data.json') as f:
-        #     data_info = json.load(f)
-
+    if opt.obj_path is not None:
+    
         file_dict = {} # interhand index : fild index
-        with open(os.path.join("./test_data/file_dict.txt"), "r") as f:
+        with open(os.path.join(f"{opt.file_dict_path}file_dict.txt"), "r") as f:
             for line in f:
                 chunks = line.split()
                 file_dict[chunks[2]] = chunks[0] 
 
-
-        # import pickle
-        # datas = []
-
-        # for interhand_idx in tqdm(file_dict.keys()):
-
-        #     camera_id = str(data_info['images'][int(interhand_idx)]['camera'])
-        #     capture_id = str(data_info['images'][int(interhand_idx)]['capture'])
-        #     width = int(data_info['images'][int(interhand_idx)]['width'])
-        #     height = int(data_info['images'][int(interhand_idx)]['height'])
-
-        #     data = {
-        #         'campos': camera_info[capture_id]['campos'][camera_id],
-        #         'camrot': camera_info[capture_id]['camrot'][camera_id],
-        #         'focal': camera_info[capture_id]['focal'][camera_id],
-        #         'princpt': camera_info[capture_id]['princpt'][camera_id],
-        #         'width': width,
-        #         'height': height,
-        #     }
-        #     datas.append(data)
-
-        # with open('camera_info.pickle', 'wb') as f:
-        #     pickle.dump(datas, f)
-
-        with open("camera_info.pickle","rb") as fr:
-            camera_info = pickle.load(fr)
-
-
-        for i, interhand_idx in tqdm(enumerate(file_dict.keys())):
-            #metadata = loader.load_metadata(int(interhand_idx))
+        for interhand_idx in tqdm(file_dict.keys()):
             
             file_idx = file_dict[interhand_idx]
             
-            # camera_id = str(data_info['images'][int(interhand_idx)]['camera'])
-            # capture_id = str(data_info['images'][int(interhand_idx)]['capture'])
-
-            # cam_param = {
-            #     'campos': camera_info[capture_id]['campos'][camera_id],
-            #     'camrot': camera_info[capture_id]['camrot'][camera_id],
-            #     'focal': camera_info[capture_id]['focal'][camera_id],
-            #     'princpt': camera_info[capture_id]['princpt'][camera_id],
-            # }
-            #cam_param = camera_info[i]
-
-            img = cv.imread(f"./test_data/{int(file_idx)}.jpg")
+            img = cv.imread(f"{img_path}{int(file_idx)}.jpg")
             obj_paths = {
-                "left": f'./sample_2/{file_idx}_left.obj',
-                "right": f'./sample_2/{file_idx}_right.obj',
+                "left": f'{opt.obj_path}{file_idx}_left.obj',
+                "right": f'{opt.obj_path}{file_idx}_right.obj',
             }
             with open(f"anno/{int(file_idx)}.pkl","rb") as fr:
                 data_info = pickle.load(fr)
@@ -119,9 +73,6 @@ def ours_renderer(opt, img_path, output_path, test=True):
             
             concated_image = cv.hconcat([img, img_out])
             cv.imwrite(os.path.join(output_path, file_idx + '_output.jpg'), concated_image)
-
-    # if opt.predictions_path is not None:
-    #     raise NotImplementedError
     
     # else:
     #     model = InterRender(cfg_path=opt.cfg,
@@ -191,12 +142,13 @@ if __name__ == '__main__':
     parser.add_argument("--cfg", type=str, default='misc/model/config.yaml')
     parser.add_argument("--model", type=str, default='misc/model/wild_demo.pth')
     parser.add_argument("--img_path", type=str, default=None)
-    parser.add_argument("--predictions_path", type=str, default=None)
+    parser.add_argument("--obj_path", type=str, default=None)
+    parser.add_argument("--file_dict_path", type=str, default=None)
     parser.add_argument("--live_demo", action='store_true')
     parser.add_argument("--render_size", type=int, default=256)
     parser.add_argument("--method", type=str, default='intaghand') # 'inataghand', 'ours'
     parser.add_argument("--dataset", type=str, default='InterHand') # 'InterHand' , 'RGB2Hands', 'EgoHands'
-
+    
     opt = parser.parse_args()
 
     if opt.dataset == 'InterHand':
@@ -237,6 +189,11 @@ if __name__ == '__main__':
         raise NotImplementedError
 
 '''
+# for rendering
+python apps/renderer.py --dataset InterHand --method ours --obj_path 'path to obj folder' --img_path 'path to image folder' --file_dict_path
+python apps/renderer.py --dataset InterHand --method ours --obj_path './sample_2/' --img_path './test_data/' --file_dict_path './test_data/'
+
+
 python apps/renderer.py --dataset RGB2Hands --method intaghand
 python apps/renderer.py --dataset InterHand --method intaghand
 python apps/renderer.py --dataset EgoHands --method intaghand
