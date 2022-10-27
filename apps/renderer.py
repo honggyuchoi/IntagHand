@@ -222,7 +222,7 @@ def intaghand_renderer(opt, output_path, img_path=None, img_list=None, camera_pa
             concated_image = cv.hconcat([img, img_overlap, img_other_view_1, img_other_view_2])
             cv.imwrite(os.path.join(output_path, img_name + '_output.jpg'), concated_image)
 
-def intaghand_and_ours_renderer(opt, output_path, img_path=None, img_list=None, camera_param_list=None):
+def intaghand_and_ours_renderer(opt, output_path, img_path=None, root_path=None):
     model = InterRender(cfg_path=opt.cfg,
                         model_path=opt.model,
                         render_size=opt.render_size)
@@ -232,7 +232,10 @@ def intaghand_and_ours_renderer(opt, output_path, img_path=None, img_list=None, 
     #     for line in f:
     #         chunks = line.split()
     #         file_dict[chunks[2]] = chunks[0] 
-    root_path = './honggyu/'
+    if root_path == None:
+        root_path = './honggyu/'
+    else:
+        pass
     ours_path = root_path + 'ours/'
     halo_baseline_path = root_path + 'halo_baseline/'
 
@@ -302,6 +305,7 @@ if __name__ == '__main__':
     parser.add_argument("--method", type=str, default='intaghand') # 'inataghand', 'ours'
     parser.add_argument("--dataset", type=str, default='InterHand') # 'InterHand' , 'RGB2Hands', 'EgoHands'
     parser.add_argument("--render_both", action='store_true', default=False)
+    parser.add_argument("--root_path", type=str, default=None)
 
     opt = parser.parse_args()
 
@@ -316,7 +320,7 @@ if __name__ == '__main__':
         if opt.render_both == True:
             output_path = output_path + 'both/'
             os.makedirs(output_path, exist_ok=True)
-            intaghand_and_ours_renderer(opt, output_path, img_path)
+            intaghand_and_ours_renderer(opt, output_path, img_path, opt.root_path)
           
         else:
             if opt.method == 'intaghand':
@@ -373,6 +377,10 @@ if __name__ == '__main__':
 
 '''
 # for rendering
+python apps/renderer.py --dataset InterHand --render_both --root_path 'path to data_dir_root'
+python apps/renderer.py --dataset InterHand --render_both --root_path ./honggyu/
+# subdir: ours, halo_baseline
+
 python apps/renderer.py --dataset InterHand --method ours --obj_path 'path to obj folder' --img_path 'path to image folder' --file_dict_path 'path to file_dict folder'
 python apps/renderer.py --dataset InterHand --method ours --obj_path './sample_2/' --img_path './test_data/' --file_dict_path './test_data/'
 
