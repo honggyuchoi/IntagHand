@@ -110,8 +110,8 @@ class InterRender():
              [-math.sin(theta), 0, math.cos(theta)]]
         R = torch.tensor(R).float().cuda()
 
-        v3d_left = torch.matmul(v3d_left, R)
-        v3d_right = torch.matmul(v3d_right, R)
+        v3d_left = torch.matmul(v3d_left, R) 
+        v3d_right = torch.matmul(v3d_right, R) 
 
         img_out, mask_out = self.renderer.render_rgb_orth(scale_left=torch.ones((1,)).float().cuda() * 3,
                                                           scale_right=torch.ones((1,)).float().cuda() * 3,
