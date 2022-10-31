@@ -1,3 +1,4 @@
+from configparser import Interpolation
 from re import T
 from tkinter import image_names
 import numpy as np
@@ -222,10 +223,11 @@ def intaghand_renderer(opt, output_path, img_path=None, img_list=None, camera_pa
             concated_image = cv.hconcat([img, img_overlap, img_other_view_1, img_other_view_2])
             cv.imwrite(os.path.join(output_path, img_name + '_output.jpg'), concated_image)
 
-def intaghand_and_ours_renderer(opt, output_path, img_path=None, root_path=None):
+def intaghand_and_ours_renderer_interhand(opt, output_path, img_path=None, root_path=None):
     model = InterRender(cfg_path=opt.cfg,
                         model_path=opt.model,
-                        render_size=opt.render_size)
+                        render_size=1024)
+    renderer = ours_two_hand_renderer(img_size=1024, device='cuda')
 
     # file_dict = {} # interhand index : fild index
     # with open(os.path.join(f"{opt.file_dict_path}file_dict.txt"), "r") as f:
@@ -236,11 +238,12 @@ def intaghand_and_ours_renderer(opt, output_path, img_path=None, root_path=None)
         root_path = './honggyu/'
     else:
         pass
-    ours_path = root_path + 'ours/'
+    ours_path = root_path + 'honggyu_vis/'
     halo_baseline_path = root_path + 'halo_baseline/'
 
     obj_list = glob.glob(os.path.join(ours_path, '*.obj'))
-    file_idx_list = list(set([i.split('_')[0].split('/')[3] for i in obj_list]))
+    file_idx_list = list(set([i.split('/')[3].split('_')[0] for i in obj_list]))
+    # file_idx_list = list(set([i.split('_')[0].split('/')[3] for i in obj_list]))
     file_idx_list.sort()
     #import pdb; pdb.set_trace()
 
@@ -257,40 +260,98 @@ def intaghand_and_ours_renderer(opt, output_path, img_path=None, root_path=None)
             "left": f'{halo_baseline_path}{file_idx}_left.obj',
             "right": f'{halo_baseline_path}{file_idx}_right.obj',
         }
+        
+        up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
         with open(f"anno/{int(file_idx)}.pkl","rb") as fr:
             data_info = pickle.load(fr)
         #import pdb;pdb.set_trace()
         # Ours 
-        renderer = ours_two_hand_renderer(img_size=256, device='cuda')
-
         obj_paths = [halo_baseline_obj_path, ours_obj_paths]
 
         total_img = [] 
         for obj_path in obj_paths:
-            img_out = renderer.render(img, obj_path, data_info['camera'])
-            img_out_1 = renderer.render_other_view_ours(img, obj_path, data_info['camera'], theta=90)
-            img_out_2= renderer.render_other_view_ours(img, obj_path, data_info['camera'], theta=180)
+            img_out = renderer.render(up_img, obj_path, data_info['camera'])
+            img_out_1 = renderer.render_other_view_ours(up_img, obj_path, data_info['camera'], theta=90)
+            img_out_2= renderer.render_other_view_ours(up_img, obj_path, data_info['camera'], theta=180)
             
             total_img.append([img_out, img_out_1, img_out_2])
 
         # Intaghand
         params = model.run_model(img)
-        img_overlap = model.render(params, bg_img=img)
+        img_overlap = model.render(params, bg_img=up_img)
         img_other_view_1 = model.render_other_view(params, theta=90)
         img_other_view_2 = model.render_other_view(params, theta=180)
 
-        concated_image = cv.hconcat([img, 
+        concated_image = cv.hconcat([up_img, 
                                     total_img[0][0], # halo_baseline
                                     total_img[0][1], 
                                     total_img[0][2], 
+                                    up_img, 
                                     img_overlap, #intaghand
                                     img_other_view_1,
                                     img_other_view_2,
+                                    up_img, 
                                     total_img[1][0], # ours
                                     total_img[1][1], 
                                     total_img[1][2], 
                                     ])
         cv.imwrite(os.path.join(output_path, file_idx + '_output.jpg'), concated_image)
+
+def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_lists, camera_param_list, img_path=None, root_path=None):
+    model = InterRender(cfg_path=opt.cfg,
+                        model_path=opt.model,
+                        render_size=1024)
+    renderer = ours_two_hand_renderer(img_size=1024, device='cuda')
+
+    # file_dict = {} # interhand index : fild index
+    # with open(os.path.join(f"{opt.file_dict_path}file_dict.txt"), "r") as f:
+    #     for line in f:
+    #         chunks = line.split()
+    #         file_dict[chunks[2]] = chunks[0] 
+    if root_path == None:
+        root_path = '../'
+    else:
+        pass
+    ours_path = root_path + 'rgb2hands_results/'
+
+    obj_list = glob.glob(os.path.join(ours_path, '*.obj'))
+    file_idx_list = list(set([i.split('/')[2].split('_')[0] for i in obj_list]))
+    # file_idx_list = list(set([i.split('_')[0].split('/')[3] for i in obj_list]))
+    file_idx_list.sort()
+    #import pdb; pdb.set_trace()
+
+    #import pdb; pdb.set_trace()
+    # 10 단위
+    idx = 0 
+    for i in range(len(img_lists)):
+        camera = camera_param_list[i]
+        camera = torch.Tensor(camera)
+        img_list = img_lists[i]
+        for img in img_list:
+            #import pdb; pdb.set_trace()
+            file_idx = file_idx_list[idx]
+            print(file_idx)
+            ours_obj_paths = {
+                "left": f'{ours_path}{file_idx}_left.obj',
+                "right": f'{ours_path}{file_idx}_right.obj',
+            }
+            up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
+            # Ours 
+            img_out = renderer.render_rgb2hands(up_img, ours_obj_paths, camera)
+                
+            # Intaghand
+            params = model.run_model(img)
+            img_overlap = model.render(params, bg_img=up_img)
+
+            concated_image = cv.hconcat([
+                                        up_img, 
+                                        img_overlap, #intaghand
+                                        up_img, 
+                                        img_out, # ours
+                                        ])
+            cv.imwrite(os.path.join(output_path, file_idx + '_output.jpg'), concated_image)
+            idx+=1
+           
 
 
 
@@ -306,6 +367,7 @@ if __name__ == '__main__':
     parser.add_argument("--dataset", type=str, default='InterHand') # 'InterHand' , 'RGB2Hands', 'EgoHands'
     parser.add_argument("--render_both", action='store_true', default=False)
     parser.add_argument("--root_path", type=str, default=None)
+    parser.add_argument("--out_path", type=str, default=None)
 
     opt = parser.parse_args()
 
@@ -314,13 +376,16 @@ if __name__ == '__main__':
             img_path = './interhand_test_image/img/'
         else:
             img_path = opt.img_path
-        output_path = 'interhand_outputs/'
+        if opt.out_path is not None:
+            output_path = opt.out_path
+        else:
+            output_path = 'qualitative_outputs/'
 
         # Render all(baseline + Intaghand + ours)
         if opt.render_both == True:
             output_path = output_path + 'both/'
             os.makedirs(output_path, exist_ok=True)
-            intaghand_and_ours_renderer(opt, output_path, img_path, opt.root_path)
+            intaghand_and_ours_renderer_interhand(opt, output_path, img_path, opt.root_path)
           
         else:
             if opt.method == 'intaghand':
@@ -339,20 +404,30 @@ if __name__ == '__main__':
             img_path = './RGB2Hands_test_image/color/'
         else:
             img_path = opt.img_path
-        output_path = './RGB2Hands_outputs/'
+
+        if opt.out_path is not None:
+            output_path = opt.out_path
+        else:
+            output_path = './RGB2Hands_outputs/'
 
         os.makedirs(output_path, exist_ok=True)
 
         img_list, camera_param_list = img_preprocessing(opt.dataset)
 
-        if opt.method == 'intaghand':
-            output_path = output_path + 'intaghand/'
+        if opt.render_both == True:
+            output_path = output_path + 'both/'
             os.makedirs(output_path, exist_ok=True)
-            intaghand_renderer(opt, output_path,  img_list=img_list)
-        elif opt.method == 'ours':
-            ours_renderer(opt, img_list, camera_param_list, output_path  + 'ours/') 
+            intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_list, camera_param_list, img_path, opt.root_path)
+
         else:
-            raise NotImplementedError
+            if opt.method == 'intaghand':
+                output_path = output_path + 'intaghand/'
+                os.makedirs(output_path, exist_ok=True)
+                intaghand_renderer(opt, output_path,  img_list=img_list)
+            elif opt.method == 'ours':
+                ours_renderer(opt, img_list, camera_param_list, output_path  + 'ours/') 
+            else:
+                raise NotImplementedError
 
     # elif opt.dataset == 'EgoHands':
     #     if opt.img_path == None:
@@ -378,7 +453,13 @@ if __name__ == '__main__':
 '''
 # for rendering
 python apps/renderer.py --dataset InterHand --render_both --root_path 'path to data_dir_root'
-python apps/renderer.py --dataset InterHand --render_both --root_path ./honggyu/
+python apps/renderer.py --dataset InterHand --render_both --root_path ../render/
+
+python apps/renderer.py --dataset InterHand --render_both --root_path ../render/ --out_path ./qualitative_outputs_high/
+
+python apps/renderer.py --dataset RGB2Hands --render_both --root_path ../ --out_path ./rgb2hand_qualitative_high/
+
+
 # subdir: ours, halo_baseline
 
 python apps/renderer.py --dataset InterHand --method ours --obj_path 'path to obj folder' --img_path 'path to image folder' --file_dict_path 'path to file_dict folder'
