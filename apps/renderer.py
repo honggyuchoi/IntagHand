@@ -24,15 +24,252 @@ import json
 from utils.vis_utils import ours_two_hand_renderer
 import pickle
 
+# def depth2world(depth, depth_camera_intrinsic):
+import scipy
+import skimage
+import numpy as np
+#from pypardiso import spsolve
+from scipy.sparse.linalg import spsolve
+from PIL import Image
+
+
+# fill_depth_colorization.m
+# Preprocesses the kinect depth image using a gray scale version of the
+# RGB image as a weighting for the smoothing. This code is a slight
+# adaptation of Anat Levin's colorization code:
+#
+# See: www.cs.huji.ac.il/~yweiss/Colorization/
+
+def fill_depth_colorization(imgRgb=None, imgDepthInput=None, alpha=1):
+    '''
+    :param imgRgb: - HxWx3 matrix, the rgb image for the current frame. This must be between 0 and 1.
+    :param imgDepthInput:  HxW matrix, the depth image for the current frame in absolute (meters) space.
+    :param alpha: a penalty value between 0 and 1 for the current depth values.
+    :return: Filled depth
+    '''
+    imgIsNoise = imgDepthInput == 0
+    maxImgAbsDepth = np.max(imgDepthInput)
+    imgDepth = imgDepthInput / maxImgAbsDepth
+    imgDepth[imgDepth > 1] = 1
+    (H, W) = imgDepth.shape
+    numPix = H * W
+    indsM = np.arange(numPix).reshape((W, H)).transpose()
+    knownValMask = (imgIsNoise == False).astype(int) # valid values regions
+    grayImg = skimage.color.rgb2gray(imgRgb)
+    winRad = 1
+    len_ = 0
+    absImgNdx = 0
+    len_window = (2 * winRad + 1) ** 2
+    len_zeros = numPix * len_window
+
+    cols = np.zeros(len_zeros) - 1
+    rows = np.zeros(len_zeros) - 1
+    vals = np.zeros(len_zeros) - 1
+    gvals = np.zeros(len_window) - 1
+
+    for j in range(W):
+        for i in range(H):
+            nWin = 0
+            for ii in range(max(0, i - winRad), min(i + winRad + 1, H)):
+                for jj in range(max(0, j - winRad), min(j + winRad + 1, W)):
+                    if ii == i and jj == j:
+                        continue
+
+                    rows[len_] = absImgNdx
+                    cols[len_] = indsM[ii, jj]
+                    gvals[nWin] = grayImg[ii, jj]
+
+                    len_ = len_ + 1
+                    nWin = nWin + 1
+
+            curVal = grayImg[i, j]
+            gvals[nWin] = curVal
+            c_var = np.mean((gvals[:nWin + 1] - np.mean(gvals[:nWin + 1])) ** 2)
+
+            csig = c_var * 0.6
+            mgv = np.min((gvals[:nWin] - curVal) ** 2)
+            if csig < -mgv / np.log(0.01):
+                csig = -mgv / np.log(0.01)
+
+            if csig < 2e-06:
+                csig = 2e-06
+
+            gvals[:nWin] = np.exp(-(gvals[:nWin] - curVal) ** 2 / csig)
+            gvals[:nWin] = gvals[:nWin] / sum(gvals[:nWin])
+            vals[len_ - nWin:len_] = -gvals[:nWin]
+
+            # Now the self-reference (along the diagonal).
+            rows[len_] = absImgNdx
+            cols[len_] = absImgNdx
+            vals[len_] = 1  # sum(gvals(1:nWin))
+
+            len_ = len_ + 1
+            absImgNdx = absImgNdx + 1
+
+    vals = vals[:len_]
+    cols = cols[:len_]
+    rows = rows[:len_]
+    A = scipy.sparse.csr_matrix((vals, (rows, cols)), (numPix, numPix))
+
+    rows = np.arange(0, numPix)
+    cols = np.arange(0, numPix)
+    vals = (knownValMask * alpha).transpose().reshape(numPix)
+    G = scipy.sparse.csr_matrix((vals, (rows, cols)), (numPix, numPix))
+
+    A = A + G
+    b = np.multiply(vals.reshape(numPix), imgDepth.flatten('F'))
+
+    # print ('Solving system..')
+
+    new_vals = spsolve(A, b)
+    new_vals = np.reshape(new_vals, (H, W), 'F')
+
+    # print ('Done.')
+
+    denoisedDepthImg = new_vals * maxImgAbsDepth
+
+    output = denoisedDepthImg.reshape((H, W)).astype('float32')
+
+    output = np.multiply(output, (1 - knownValMask)) + imgDepthInput
+
+    return output
+
+def depth_to_img(color_camera_intrinsic, depth_camera_intrinsic, extrinsic, depth_img, color):
+    fx_d = depth_camera_intrinsic[0]
+    fy_d = depth_camera_intrinsic[1]
+    cx_d = depth_camera_intrinsic[2]
+    cy_d = depth_camera_intrinsic[3]
+
+    fx_rgb = color_camera_intrinsic[0]
+    fy_rgb = color_camera_intrinsic[1]
+    cx_rgb = color_camera_intrinsic[2]
+    cy_rgb = color_camera_intrinsic[3]
+
+    height = depth_img.shape[0]
+    width = depth_img.shape[1]
+    aligned = np.zeros((height, width, 6))
+
+    depth_scale = 1.
+    for v in range(height):
+        for u in range(width):
+            d = depth_img[v,u] * depth_scale
+            x_over_z = ((u - cx_d)) / fx_d
+            y_over_z = ((v - cy_d)) / fy_d
+
+            z = d / np.sqrt(1. + x_over_z**2 + y_over_z**2)
+
+            x = x_over_z * z
+            y = y_over_z * z
+
+            transformed_x = x - extrinsic[0]
+            transformed_y = y - extrinsic[1]
+            transformed_z = z - extrinsic[2]
+
+            aligned[v,u,0] = transformed_x
+            aligned[v,u,1] = transformed_y
+            aligned[v,u,2] = transformed_z
+    
+    aligned_depth = np.zeros((height, width))
+    fill = np.zeros((height, width))
+    count = np.zeros((height, width))
+
+    linear_expand_x = [0,0,0,0,0,0,0,0,  -1,-1,-1,-1,-1,-1,-1,-1, 1,1,1,1,1,1,1,1, -2,-2,-2,-2,-2,-2,-2,-2, 2,2,2,2,2,2,2,2]
+    linear_expand_y = [-3,-4,-5,-6,-7,-8,-9,-10, -3,-4,-5,-6,-7,-8,-9,-10, -3,-4,-5,-6,-7,-8,-9,-10,-3,-4,-5,-6,-7,-8,-9,-10,-3,-4,-5,-6,-7,-8,-9,-10]
+
+    dx = [1,0,-1,0,1,1,-1,-1,-2,-2,-2,-2,-2,-1,-1,0,0,1,1,2,2,2,2,2] + linear_expand_x + linear_expand_x  + (-1 * linear_expand_y)
+    dx = np.array(dx)
+    dy = [0,1,0,-1,-1,1,-1,1,-2,-1,0,1,2,-2,2,-2,2,-2,2,-2,-1,0,2,2] + linear_expand_y + (-1 * linear_expand_y) + linear_expand_x
+    dy = np.array(dy)
+    for v in range(height):
+        for u in range(width):
+            x = aligned[v,u,0]
+            y = aligned[v,u,1]
+            z = aligned[v,u,2]
+            
+            if z != 0:
+                x_over_z = x / z    
+                y_over_z = y / z 
+                d = z * np.sqrt(1. + x_over_z**2 + y_over_z**2)
+                new_u = x_over_z * fx_rgb + cx_rgb
+                new_v = y_over_z * fy_rgb + cy_rgb
+                if new_u > width-1 or new_v > height-1 or new_u < 0 or new_v < 0:
+                    pass
+                else:
+                    rounded_v = int(round(new_v))
+                    rounded_u = int(round(new_u))
+
+                    # 넣을 때 주위 픽셀에 함께 넣어주어서 빈공간 채우기
+                    if (aligned_depth[rounded_v][rounded_u] == 0):
+                        aligned_depth[rounded_v][rounded_u] = d
+                        expand_v = np.array([rounded_v] * dx.shape[0])
+                        expand_u = np.array([rounded_u] * dx.shape[0])
+
+                        fill_v = expand_v + dx
+                        fill_u = expand_u + dy
+
+                        v_mask = (fill_v <= height-1) & (fill_v >= 0) 
+                        u_mask = (fill_u <= width-1) & (fill_u >= 0) 
+                        mask = v_mask & u_mask
+
+                        fill_v = fill_v[mask]
+                        fill_u = fill_u[mask]
+                        
+                        fill[fill_v,fill_u] += d
+                        count[fill_v,fill_u] += 1
+
+                        # for d_x, d_y in zip(dx,dy):
+                        #     if rounded_v + d_x > height -1 or rounded_v + d_x < 0 or rounded_u + d_y >width or rounded_u + d_y < 0:
+                        #         pass
+                        #     else:
+                        #         fill[rounded_v + d_x][rounded_u + d_y] += d
+                        #         count[rounded_v + d_x][rounded_u + d_y] += 1
+
+                    elif (aligned_depth[rounded_v][rounded_u] > d):
+                        aligned_depth[rounded_v][rounded_u] = d
+                        expand_v = np.array([rounded_v] * dx.shape[0])
+                        expand_u = np.array([rounded_u] * dx.shape[0])
+
+                        fill_v = expand_v + dx
+                        fill_u = expand_u + dy
+
+                        v_mask = (fill_v <= height-1) & (fill_v >= 0) 
+                        u_mask = (fill_u <= width-1) & (fill_u >= 0) 
+                        mask = v_mask & u_mask
+
+                        fill_v = fill_v[mask]
+                        fill_u = fill_u[mask]
+                        fill[fill_v,fill_u] = d
+                        count[fill_v,fill_u] = 1
+                        # for d_x, d_y in zip(dx,dy):
+                        #     if rounded_v + d_x > height -1 or rounded_v + d_x < 0 or rounded_u + d_y >width or rounded_u + d_y < 0:
+                        #         pass
+                        #     else:
+                        #         fill[rounded_v + d_x][rounded_u + d_y] = d
+                        #         count[rounded_v + d_x][rounded_u + d_y] = 1
+    mask = (aligned_depth == 0) & (count != 0)
+    aligned_depth[mask] = fill[mask] / count[mask]
+
+    mask =  aligned_depth * count > fill 
+    aligned_depth[mask] = fill[mask] / count[mask]
+    
+    # for v in range(height):
+    #     for u in range(width):
+    #         if aligned_depth[v][u] == 0 and count[v][u] != 0.:
+    #             aligned_depth[v][u] = fill[v][u] / count[v][u]
+
+        
+    return aligned_depth
 
 def img_preprocessing(dataset):
     '''
         annotation 맨 왼쪽위 맨 오른쪽밑 좌표 뽑아서 padding: 50으로 하고 뽑뽑
     '''
+    os.makedirs('./masked_test/', exist_ok=True)
     print('Start preprocessing')
     if dataset == 'RGB2Hands':
         root_path = './RGB2HANDS_Benchmark/'
-        folder_list = ['seq01_crossed/', 'seq02_occlusion/', 'seq03_shuffle/', 'seq04_scratch/']
+        # folder_list = ['seq01_crossed/', 'seq02_occlusion/', 'seq03_shuffle/', 'seq04_scratch/']
+        folder_list = ['seq04_scratch/']
         
         total_img_list_out = []
         total_camera_param = []
@@ -42,17 +279,22 @@ def img_preprocessing(dataset):
         # dx = principal point axis-x
         # dy = principal point axis-y
         with open(root_path + 'color_intrinsics.txt', "r") as f:
-            camera_intrinsics = list(map(float, f.readline().split()))
-        # with open(root_path + 'extrinsics.txt', "r") as f:
-        #     extrinsics = list(map(float, f.readline().split()))
+            color_camera_intrinsics = list(map(float, f.readline().split()))
+        with open(root_path + 'depth_intrinsics.txt', "r") as f:
+            depth_camera_intrinsics = list(map(float, f.readline().split()))
+        with open(root_path + 'extrinsics.txt', "r") as f:
+            extrinsics = list(map(float, f.readline().split()))
+        idx = 1332
         for folder in folder_list:
-            
+            depth_path = f'./RGB2HANDS_Benchmark/{folder}/depth/'
             img_path = f'./RGB2HANDS_Benchmark/{folder}/color/'
             anno_path = f'./RGB2HANDS_Benchmark/{folder}/annotation/annot2D_color/'
             anno_path_list = glob.glob(os.path.join(anno_path, '*.txt'))
             img_path_list = glob.glob(os.path.join(img_path, '*.jpg')) + glob.glob(os.path.join(img_path, '*.png'))
-
-
+            depth_path_list = glob.glob(os.path.join(depth_path, '*.jpg')) + glob.glob(os.path.join(depth_path, '*.png'))
+            img_path_list.sort()
+            depth_path_list.sort()
+            os.makedirs(f'./masked_test/{folder}', exist_ok=True) 
             total_joints = []
             for anno_path in tqdm(anno_path_list):
                 with open(anno_path, "r") as f:
@@ -80,16 +322,58 @@ def img_preprocessing(dataset):
                                         [0, 1, L - mid[1]]])
 
             img_list_out = []
-            for img_path in tqdm(img_path_list):
-                img = cv.imread(img_path)
-                img_list_out.append(cv.warpAffine(img, M, dsize=(256, 256)))
-            total_img_list_out.append(img_list_out)
-            refined_camera_intrinsics = [camera_intrinsics[0] *  M[0, 0],
-                                         camera_intrinsics[1] * M[1,1],
-                                         camera_intrinsics[2] * M[0,0] + M[0,2],
-                                         camera_intrinsics[3] * M[1,1] + M[1,2]]
+            for img_path, depth_path in tqdm(zip(img_path_list,depth_path_list)):
+                depth_img = cv.imread(depth_path, cv.IMREAD_UNCHANGED)
+                depth_img = np.array(depth_img).astype(np.float64)
+                depth_img[(depth_img > 1000)] = 0
+                
+                img = cv.imread(img_path).astype(np.float64)
+                
+                aligned_depth = depth_to_img(color_camera_intrinsics, depth_camera_intrinsics, extrinsics, depth_img, img / 255.0)
+
+                mask = np.zeros_like(aligned_depth)
+                mask[(aligned_depth > 350) &(aligned_depth < 600)] = 1.0
+                
+                for h in range(mask.shape[0]):
+                    for i in range(1,10):
+                        one_mask = mask[mask.shape[0] -h -i,:] > 0
+                        mask[(mask.shape[0] - h - 1), one_mask] = mask[(mask.shape[0] -h -i),one_mask]
+                    for i in range(1,5):
+                        if h+i > mask.shape[0] - 1:
+                            break
+                        one_mask = mask[h+i, :] > 0
+                        mask[h, one_mask] = mask[h + i, one_mask]
+        
+                
+                mask = np.expand_dims(mask, axis=-1)
+                cv.imwrite(f'./masked_test/aligned_mask_{idx}.jpg', mask * 255.0)
+
+                aligned_depth /= aligned_depth.max()
+                aligned_depth *= 255.0
+                aligned_depth = aligned_depth.astype(np.uint8)
+                colormap = cv.applyColorMap(aligned_depth, cv.COLORMAP_INFERNO)
+                cv.imwrite(f'./masked_test/aligned_depth_{idx}.jpg', colormap)
+                
+                img = img * mask
+                
+                cv.imwrite(f'./masked_test/masked_output_{idx}.jpg', img)
+                idx += 1
+                cropped_img = cv.warpAffine(img, M, dsize=(256, 256))
+
+                cv.imwrite(f'./masked_test/masked_cropped_output_{idx}.jpg', cropped_img)
+                
+            
+            refined_camera_intrinsics = [color_camera_intrinsics[0] *  M[0, 0],
+                                         color_camera_intrinsics[1] * M[1,1],
+                                         color_camera_intrinsics[2] * M[0,0] + M[0,2],
+                                         color_camera_intrinsics[3] * M[1,1] + M[1,2]]
 
             total_camera_param.append(refined_camera_intrinsics)
+        import pickle
+        ## Save pickle
+        with open(f"./masked_test/{folder}/rgb2_hands_total_camera_param.pickle","wb") as fw:
+            pickle.dump(total_camera_param, fw)
+
         
         print('End preprocessing')
         return total_img_list_out, total_camera_param
@@ -223,11 +507,15 @@ def intaghand_renderer(opt, output_path, img_path=None, img_list=None, camera_pa
             concated_image = cv.hconcat([img, img_overlap, img_other_view_1, img_other_view_2])
             cv.imwrite(os.path.join(output_path, img_name + '_output.jpg'), concated_image)
 
-def intaghand_and_ours_renderer_interhand(opt, output_path, img_path=None, root_path=None):
+def intaghand_and_ours_renderer_interhand(opt, output_path, img_path=None, root_path=None, high_resolution=False):
+    if high_resolution == False:
+        img_size = 256
+    else:
+        img_size = 1024
     model = InterRender(cfg_path=opt.cfg,
                         model_path=opt.model,
-                        render_size=1024)
-    renderer = ours_two_hand_renderer(img_size=1024, device='cuda')
+                        render_size=img_size)
+    renderer = ours_two_hand_renderer(img_size=img_size, device='cuda')
 
     # file_dict = {} # interhand index : fild index
     # with open(os.path.join(f"{opt.file_dict_path}file_dict.txt"), "r") as f:
@@ -260,8 +548,10 @@ def intaghand_and_ours_renderer_interhand(opt, output_path, img_path=None, root_
             "left": f'{halo_baseline_path}{file_idx}_left.obj',
             "right": f'{halo_baseline_path}{file_idx}_right.obj',
         }
-        
-        up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
+        if high_resolution == False:
+            up_img = img
+        else:
+            up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
         with open(f"anno/{int(file_idx)}.pkl","rb") as fr:
             data_info = pickle.load(fr)
         #import pdb;pdb.set_trace()
@@ -296,12 +586,18 @@ def intaghand_and_ours_renderer_interhand(opt, output_path, img_path=None, root_
                                     total_img[1][2], 
                                     ])
         cv.imwrite(os.path.join(output_path, file_idx + '_output.jpg'), concated_image)
+        break
 
-def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_lists, camera_param_list, img_path=None, root_path=None):
+def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_lists, camera_param_list, img_path=None, root_path=None,  high_resolution=False):
+    if high_resolution == False:
+        img_size = 256
+    else:
+        img_size = 1024
+
     model = InterRender(cfg_path=opt.cfg,
                         model_path=opt.model,
-                        render_size=1024)
-    renderer = ours_two_hand_renderer(img_size=1024, device='cuda')
+                        render_size=img_size)
+    renderer = ours_two_hand_renderer(img_size=img_size, device='cuda')
 
     # file_dict = {} # interhand index : fild index
     # with open(os.path.join(f"{opt.file_dict_path}file_dict.txt"), "r") as f:
@@ -312,7 +608,7 @@ def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_lists, camera_pa
         root_path = '../'
     else:
         pass
-    ours_path = root_path + 'rgb2hands_results/'
+    ours_path = root_path + 'rgb2hands_results_2/'
 
     obj_list = glob.glob(os.path.join(ours_path, '*.obj'))
     file_idx_list = list(set([i.split('/')[2].split('_')[0] for i in obj_list]))
@@ -335,7 +631,10 @@ def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_lists, camera_pa
                 "left": f'{ours_path}{file_idx}_left.obj',
                 "right": f'{ours_path}{file_idx}_right.obj',
             }
-            up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
+            if high_resolution == False:
+                up_img = img
+            else:
+                up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
             # Ours 
             img_out = renderer.render_rgb2hands(up_img, ours_obj_paths, camera)
                 
@@ -368,8 +667,11 @@ if __name__ == '__main__':
     parser.add_argument("--render_both", action='store_true', default=False)
     parser.add_argument("--root_path", type=str, default=None)
     parser.add_argument("--out_path", type=str, default=None)
+    parser.add_argument("--high_resolution", action='store_true', default=False)
 
     opt = parser.parse_args()
+    #img_preprocessing('RGB2Hands')
+    #raise NotImplementedError
 
     if opt.dataset == 'InterHand':
         if opt.img_path == None:
@@ -385,7 +687,7 @@ if __name__ == '__main__':
         if opt.render_both == True:
             output_path = output_path + 'both/'
             os.makedirs(output_path, exist_ok=True)
-            intaghand_and_ours_renderer_interhand(opt, output_path, img_path, opt.root_path)
+            intaghand_and_ours_renderer_interhand(opt, output_path, img_path, opt.root_path, opt.high_resolution)
           
         else:
             if opt.method == 'intaghand':
@@ -417,7 +719,7 @@ if __name__ == '__main__':
         if opt.render_both == True:
             output_path = output_path + 'both/'
             os.makedirs(output_path, exist_ok=True)
-            intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_list, camera_param_list, img_path, opt.root_path)
+            intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_list, camera_param_list, img_path, opt.root_path, opt.high_resolution)
 
         else:
             if opt.method == 'intaghand':
@@ -455,7 +757,7 @@ if __name__ == '__main__':
 python apps/renderer.py --dataset InterHand --render_both --root_path 'path to data_dir_root'
 python apps/renderer.py --dataset InterHand --render_both --root_path ../render/
 
-python apps/renderer.py --dataset InterHand --render_both --root_path ../render/ --out_path ./qualitative_outputs_high/
+python apps/renderer.py --dataset InterHand --render_both --root_path ../render/ --out_path ./qualitative_outputs_high/ --high_resolution
 
 python apps/renderer.py --dataset RGB2Hands --render_both --root_path ../ --out_path ./rgb2hand_qualitative_high/
 

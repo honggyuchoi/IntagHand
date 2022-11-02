@@ -190,8 +190,8 @@ class ours_two_hand_renderer(Renderer):
                 [-math.sin(theta), 0, math.cos(theta)]]
         R = torch.tensor(R).float().cuda()
 
-        left_verts = torch.matmul(left_verts, R)
-        right_verts = torch.matmul(right_verts, R)
+        left_verts = torch.matmul(left_verts, R) + c
+        right_verts = torch.matmul(right_verts, R) + c
 
 
         bs = left_verts.shape[0]
@@ -222,18 +222,33 @@ class ours_two_hand_renderer(Renderer):
         # pps = -torch.tensor(cam_param['princpt']).unsqueeze(0) * 2 / self.img_size + 1
         
         
-        scale=torch.ones((1,)).float().cuda() * 3
-        trans2d=torch.zeros((1, 2)).float().cuda()
+        # scale=torch.ones((1,)).float().cuda() * 3
+        # trans2d=torch.zeros((1, 2)).float().cuda()
         
-        bs = scale.shape[0]
-        R = torch.tensor([[-1, 0, 0], [0, -1, 0], [0, 0, 1]]).repeat(bs, 1, 1).to(scale.dtype)
-        T = torch.tensor([0, 0, 10]).repeat(bs, 1).to(scale.dtype)
-        cameras = OrthographicCameras(focal_length=1.9 * scale.to(self.device),
-                                    principal_point=-trans2d.to(self.device),
-                                    R=R.to(self.device),
-                                    T=T.to(self.device),
+        # bs = scale.shape[0]
+        # R = torch.tensor([[-1, 0, 0], [0, -1, 0], [0, 0, 1]]).repeat(bs, 1, 1).to(scale.dtype)
+        # T = torch.tensor([0, 0, 10]).repeat(bs, 1).to(scale.dtype)
+        # cameras = OrthographicCameras(focal_length=1.9 * scale.to(self.device),
+        #                             principal_point=-trans2d.to(self.device),
+        #                             R=R.to(self.device),
+        #                             T=T.to(self.device),
+        #                             in_ndc=True,
+        #                             device=self.device)
+        R = cam_param['R']
+        T = cam_param['t']
+        cameras = torch.Tensor(cam_param['camera']).unsqueeze(0)
+
+        # fs = -torch.tensor(cam_param['focal']).unsqueeze(0) * 2 / self.img_size
+        # pps = -torch.tensor(cam_param['princpt']).unsqueeze(0) * 2 / self.img_size + 1
+
+
+        fs = -torch.stack((cameras[:, 0, 0], cameras[:, 1, 1]), dim=-1) * 2 / 256
+        pps = -cameras[:, :2, -1] * 2 / 256 + 1
+        cameras = PerspectiveCameras(focal_length=fs.to(self.device),
+                                    principal_point=pps.to(self.device),
                                     in_ndc=True,
-                                    device=self.device)
+                                    device=self.device
+                                    )
 
         # fs = -torch.stack((cameras[:, 0, 0], cameras[:, 1, 1]), dim=-1) * 2 / self.img_size
         # pps = -cameras[:, :2, -1] * 2 / self.img_size + 1
