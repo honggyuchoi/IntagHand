@@ -2,6 +2,17 @@
 
 ## How to use
 
+### Comparing intaghand and ours
+
+```
+python apps/renderer.py --dataset InterHand --render_both --root_path 'path to data_dir_root' --out_path 'path to output_dir' --high_resolution
+```
+
+```
+python apps/renderer.py --dataset InterHand --render_both --root_path ../render/ --out_path ./qualitative_outputs_high/ --high_resolution
+
+```
+
 ### For our model
 ```
 python apps/renderer.py --dataset InterHand --method ours --obj_path 'path to obj folder' --img_path 'path to image folder' --file_dict_path 'path to file_dict folder'
