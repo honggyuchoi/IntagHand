@@ -588,7 +588,7 @@ def intaghand_and_ours_renderer_interhand(opt, output_path, img_path=None, root_
         cv.imwrite(os.path.join(output_path, file_idx + '_output.jpg'), concated_image)
         break
 
-def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_lists, camera_param_list, img_path=None, root_path=None,  high_resolution=False):
+def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_path='./digit/imgs/', obj_path='./digit/meshs/', high_resolution=False):
     if high_resolution == False:
         img_size = 256
     else:
@@ -608,48 +608,42 @@ def intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_lists, camera_pa
         root_path = '../'
     else:
         pass
-    ours_path = root_path + 'rgb2hands_results_2/'
 
-    obj_list = glob.glob(os.path.join(ours_path, '*.obj'))
-    file_idx_list = list(set([i.split('/')[2].split('_')[0] for i in obj_list]))
-    # file_idx_list = list(set([i.split('_')[0].split('/')[3] for i in obj_list]))
+    obj_list = glob.glob(os.path.join(obj_path, '*.obj'))
+    file_idx_list = list(set([i.split('/')[-1].split('_')[0] for i in obj_list]))
     file_idx_list.sort()
+
+    #img_list = glob.glob(os.path.join(img_path, '*.png')) + glob.glob(os.path.join(img_path, '*.jpg'))
     #import pdb; pdb.set_trace()
 
     #import pdb; pdb.set_trace()
     # 10 단위
-    idx = 0 
-    for i in range(len(img_lists)):
-        camera = camera_param_list[i]
-        camera = torch.Tensor(camera)
-        img_list = img_lists[i]
-        for img in img_list:
-            #import pdb; pdb.set_trace()
-            file_idx = file_idx_list[idx]
-            print(file_idx)
-            ours_obj_paths = {
-                "left": f'{ours_path}{file_idx}_left.obj',
-                "right": f'{ours_path}{file_idx}_right.obj',
-            }
-            if high_resolution == False:
-                up_img = img
-            else:
-                up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
-            # Ours 
-            img_out = renderer.render_rgb2hands(up_img, ours_obj_paths, camera)
-                
-            # Intaghand
-            params = model.run_model(img)
-            img_overlap = model.render(params, bg_img=up_img)
+    for obj_idx in file_idx_list:
+        #import pdb; pdb.set_trace()
+        ours_obj_paths = {
+            "left": f'{obj_path}{obj_idx}_left.obj',
+            "right": f'{obj_path}{obj_idx}_right.obj',
+        }
+        img = cv.imread(f'{img_path}{obj_idx}_output.jpg')
+        if high_resolution == False:
+            up_img = img
+        else:
+            up_img = cv.resize(img, dsize=(0,0), fx=4, fy=4, interpolation=cv.INTER_LANCZOS4)
+        # Ours 
+        img_out = renderer.render_rgb2hands(up_img, ours_obj_paths)
+            
+        # Intaghand
+        params = model.run_model(img)
+        img_overlap = model.render(params, bg_img=up_img)
 
-            concated_image = cv.hconcat([
-                                        up_img, 
-                                        img_overlap, #intaghand
-                                        up_img, 
-                                        img_out, # ours
-                                        ])
-            cv.imwrite(os.path.join(output_path, file_idx + '_output.jpg'), concated_image)
-            idx+=1
+        concated_image = cv.hconcat([
+                                    up_img, 
+                                    img_overlap, #intaghand
+                                    up_img, 
+                                    img_out, # ours
+                                    ])
+        cv.imwrite(os.path.join(output_path, obj_idx + '_output.jpg'), concated_image)
+
            
 
 
@@ -714,22 +708,22 @@ if __name__ == '__main__':
 
         os.makedirs(output_path, exist_ok=True)
 
-        img_list, camera_param_list = img_preprocessing(opt.dataset)
+        #img_list, camera_param_list = img_preprocessing(opt.dataset)
 
         if opt.render_both == True:
             output_path = output_path + 'both/'
             os.makedirs(output_path, exist_ok=True)
-            intaghand_and_ours_renderer_rgb2hands(opt, output_path, img_list, camera_param_list, img_path, opt.root_path, opt.high_resolution)
+            intaghand_and_ours_renderer_rgb2hands(opt, output_path, opt.img_path, opt.obj_path, opt.high_resolution)
 
-        else:
-            if opt.method == 'intaghand':
-                output_path = output_path + 'intaghand/'
-                os.makedirs(output_path, exist_ok=True)
-                intaghand_renderer(opt, output_path,  img_list=img_list)
-            elif opt.method == 'ours':
-                ours_renderer(opt, img_list, camera_param_list, output_path  + 'ours/') 
-            else:
-                raise NotImplementedError
+        # else:
+        #     if opt.method == 'intaghand':
+        #         output_path = output_path + 'intaghand/'
+        #         os.makedirs(output_path, exist_ok=True)
+        #         intaghand_renderer(opt, output_path,  img_list=img_list)
+        #     elif opt.method == 'ours':
+        #         ours_renderer(opt, img_list, camera_param_list, output_path  + 'ours/') 
+        #     else:
+        #         raise NotImplementedError
 
     # elif opt.dataset == 'EgoHands':
     #     if opt.img_path == None:

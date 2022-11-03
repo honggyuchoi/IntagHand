@@ -4,14 +4,22 @@
 
 ### Comparing intaghand and ours
 
+#### Interhand
 ```
 python apps/renderer.py --dataset InterHand --render_both --root_path 'path to data_dir_root' --out_path 'path to output_dir' --high_resolution
 ```
 
 ```
-python apps/renderer.py --dataset InterHand --render_both --root_path ../render/ --out_path ./qualitative_outputs_high/ --high_resolution
+python apps/renderer.py --dataset InterHand --render_both --img_path {path to image/} --obj_path {path to obj file/} --out_path ./qualitative_rgb2hands_outputs_high/ --high_resolution
 
 ```
+
+#### RGB2Hands
+```
+python apps/renderer.py --dataset RGB2Hands --render_both --root_path ../ --out_path ./rgb2hand_qualitative_high/
+
+```
+
 
 ### For our model
 ```
